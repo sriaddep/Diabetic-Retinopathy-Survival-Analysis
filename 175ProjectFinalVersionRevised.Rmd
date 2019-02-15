@@ -1,0 +1,265 @@
+---
+title: "Survival Analysis of Diabetic Retinopathy Patients"
+author: "Sriharsha Addepalli, Jaeyun Lee, Lukas Pokhrel"
+date: "12/01/2018"
+output: pdf_document
+params:
+  n: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(survival)
+library(car)
+library(MASS)
+```
+
+#Introduction/Research Interest 
+We decided to do an analysis on the survival of laser treatment for Diabetic Retinopathy patients. We found our dataset in the survival package of R^[A. L. Blair, D. R. Hadden, J. A. Weaver, D. B. Archer, P. B. Johnston and C. J. Maguire (1976). The 5-year prognosis for vision in diabetes, American Journal of Ophthalmology, 81:383-396.] ^[W. J. Huster, R. Brookmeyer and S. G. Self (1989). Modelling paired survival data with covariates, Biometrics 45:145-156.]. Our dataset contains 197 patients that were a random sample of patients with Diabetic Retinopathy. We are measuring the survival rate until vision loss, which is decided when the vision drops below an acuity of 5/200, after the treatment was done. Our time until failure is measured in months. Additionally, each patient was randomized to see which eye they get laser treatment on and the other eye was treated as a control, so treatment and control are not independent in this dataset. Survival time of the eye vision was measured for both the treatment eye and the control eye. Furthermore, there were censored observations in our dataset.  
+  
+Our dataset contains the covariates of laser (types of laser treatment used, either argon or xenon), eye (which randomized eye was operated on), age (age of the patient at the time of treatment), type (whether a person is a juvenile or and adult), and risk (a measure of how serious their diabetic retinopathy condition was before the treatment). 
+
+Our main point of interest is seeing if there is a difference in vision loss survival rates between the control and the treatment, and this will lead us to the question whether we should give laser eye surgeries to Diabetic Retinopathy patients. We  want to fit a final model to test whether any of the covariates affected survival rates, and we especially want to see if type of laser affected the survival rates of the treated eyes and compare that to the control eyes. In our extension, we want to treat the treatment and control as not independent, and use a frailty model to observe the differences between each person using the covariates of our final model.
+
+#Model Setup
+Because our dataset was from the R survival package, there was not much data wrangling to perform in order for our data to be organized to fit a proper model. This is a data summary table showing the format and distribution of the covariates in our dataset
+```{r modelsetup, echo = F}
+retinoeye <- retinopathy
+retinoeye$eye<- as.character(retinoeye$eye)
+
+
+for (i in seq(1,393,2)){
+  if(retinoeye$eye[i] == "right"){
+    retinoeye$eye[i] = "Right"
+  }else{
+    retinoeye$eye[i] = "Left"
+  }
+}
+for (i in seq(2,394,2)){
+  if (retinoeye$eye[i] == "right"){
+    retinoeye$eye[i] = "Left"
+  }else{
+    retinoeye$eye[i] = "Right"
+    }
+}
+
+retinoeye$eye <- as.factor(retinoeye$eye)
+summary(retinoeye)
+```
+
+As we can see from the summary table above, we have 9 variables in our dataset, and we have 394 observations. Laser, eye, and type are all categorical variables. Additionally, we had no missing values in our dataset.
+
+#Basic Estimation
+For the simplicity of our intial model, we are going to assume that the control and treatment are independent of one another. We want to first visualize the Kaplan Meier estimates between the treatment and control.\newline
+
+```{r kmplot, echo = F, fig.align="center"}
+ret.trt.control.survfit <- survfit(Surv(futime, status) ~ trt, data = retinopathy)
+plot(ret.trt.control.survfit, main = "Kaplan Meier Plot of Survival of Laser Treatment Patients 
+     for Control and Treated",
+     xlab = "Months until Loss of Vision", ylab = "Survival Probability", col = c(2,3),
+     mark.time = TRUE, mark = 18)
+legend(3,0.25, c("Control Eye","Treated Eye"), fill = c(2,3))
+```
+
+By looking at this plot, we notice that the treatment eye has higher survival rates than the control eye, which is to be expected by any treatment. To test whether this difference is significant, for this basic model, we fit a coxph model to test the covariate treatment to see if the treatment was significant.\newline
+
+```{r basicmodel, echo = F}
+treat.cox <- coxph(Surv(futime, status) ~ trt, data = retinopathy)
+treat.cox
+```
+When fitting a coxph model to test if there is a difference between hazard ratios between treatment and control, we obtain a p-value of 2e-06 with our likelihood ratio test. Because the p-value is lower than 0.05, we reject the null hypothesis. There is significant evidence to suggest that there is a difference between the hazard ratios of treatment and control. With the coxph model, we get that the hazard probability of the treated eye is 0.46 that of the hazard probability of the control eye. This means that treated eyes have a lower hazard rate than control, meaning the treated eyes have a higher survival probability than control. This shows that what we observed in the Kaplan Meier Plot above is significant. \newline
+
+#Model Fitting  
+In our next model, we still want to see the significance between the treatment and control and also its interaction between type of laser used, but we want to treat the other covariates as confounding variables. We are going to use the Anova function found in the car package in R to find the best model, and this will do so using likelihood ratio tests. 
+
+```{r bestmodel, echo = F}
+retino.full <- coxph(Surv(futime, status) ~  eye + age + type + risk + laser:trt + trt, data = retinopathy)
+Anova(retino.full, type = "III", test.statistic = "LR")
+```
+
+This model tests the covariates given all the other covariates are in our model to see if they are significant. We notice that only covariates that are significant are the risk factor and the treatment variable (treatment or control). Our interaction term for treatment and laser which we were interested in was not significant to our model. Another method to find the final model is by checking AIC for models with a different set of covariates.
+
+```{r morefitting, include = F}
+step <- stepAIC(retino.full, direction = "both")
+```
+```{r mfit, echo = F}
+step$anova
+```
+The stepAIC uses multiple models to find AIC and compares them together to find the best model with the lowest AIC. Using stepAIC on both directions we get that the best model is the model with only risk factor and treatment. This is the same result that we found using the Anova function which calculates LRT tests. So our final model is the model with risk factor and treatment. 
+```{r finmodel, echo = F}
+retino.control <- coxph(Surv(futime, status) ~ eye + age + type + laser, data = retinopathy)
+retino.final <- coxph(Surv(futime,status) ~ risk + trt, data = retinopathy)
+```
+```{r}
+lrt <- 2*(retino.full$loglik[2] - retino.control$loglik[2])
+lrt
+pchisq(lrt, df = 2, lower.tail = F)
+```
+
+We obtain a p-value of 6.705e-07 which is less than 0.05, so we reject the null hypothesis. We conclude that when we take into account for the confounding effects of the other covariates in our dataset, the model with risk and trt is significant.  
+
+#Model Checking
+We want to check to see if our final model follows the proportional hazards assumption using loglog plots and residual tests.
+
+
+```{r modelcheck, echo = F}
+retino_loglog <- survfit(Surv(futime, status) ~ trt, data = retinopathy)
+plot(retino_loglog, fun = "cloglog", col = c(2,3), 
+     xlab = "Time", ylab = "Log(-Log(S))",
+     main = "LogLog plot of Survival Time for Treatment and Control")
+legend(20,-4, c("control","treatment"), fill = c(2,3))
+```
+  
+When looking at the loglog plot between Treatment and Control, we see that the two lines are parallel so our proportional hazards assumption is probably true. Because our risk factor is numerical, we will not use a loglog plot to determine if proprotional hazards assumption is true. Another way to check for the proportional hazards assumption is to look at the coxzph.
+
+```{r mc}
+cox.zph(retino.final)
+```
+When we run our coxzph test, the p-value for risk of 0.197 which is greater than 0.05 suggests that we fail to reject the null hypothesis that the proportional hazards assumption is true. The p-value for trt of 0.460 is greater than 0.05 suggests that we fail to reject the null hypothesis as well. Thus, our proportional hazard assumption is true for risk and trt. This shows us that our final model satisfies the proportional hazards assumption so we are justified to use our model.
+
+#Model Explanation/Conclusion
+
+```{r}
+summary(retino.final)
+```
+
+Using the likelihood ratio test, we obtain a p-value of 4e-07 which is less than 0.05, so we reject the null hypothesis. There is a signifiant difference between hazard rates for risk factor and treatment and control, and it shows our model is significant. In addition to what we saw for the treatment versus control from the earlier part, we also obtain that for every increase in 1 risk factor, the hazard ratio goes up by 1.158 times, which means that as risk factor increases, hazard ratio also increases, causing lower survival times. Looking at our confidence intervals, we are 95% confident that the true hazard ratio between treatments and control is between 0.330 and 0.6395. Because the upper bound is also less than 1, we can tell that it is significant. Additionally, we are 95% confident that the true hazard ratio for a unit increase in risk is between 1.037 and 1.2911. Because the lower bound is also greater than 1, we can tell that this covariate is significant.  
+
+
+Through our analysis, we found that there is a significant difference between the vision loss survival between control and treated eyes when we treat control and treated as independent. In our final model, we were mainly interested in seeing if the interaction between type of laser and treatment (we are using interaction because laser is not used on control eyes), but this interaction was not significant, so the type of laser being used did not affect the survival rates significantly. In conclusion, we showed that using laser treatment helps with reducing vision loss but the type of laser being used does not matter. We also found that the risk factor which is a measure of the severity of the diabetic retinopathy affected survival rates of the patients. Overall we conclude that the factors that contribute the most to vision loss is whether the person was treated with the treatment and whether their risk of diabetic retinopathy was high. 
+
+#Extension
+
+In this extension, we are not going to disregard the dependence between the treatment and control variable, as it is the same person with one of their eyes treated and the other not. Because of this dependence, we are going to observe a frailty model, adding to the final model that we found from model fitting in the part before. In our frailty model, we are going to use the frailty function on the id of the patients to account for the individual level differences. ^[D. Kleinbaum, M. Klein (2012) Survival Analysis: A Self-Learning Text 3rd ed.]
+
+
+```{r, echo = F}
+cox.frail <- coxph(Surv(futime,status) ~ risk + trt + frailty(id, distribution="gamma"), data=retinopathy)
+cox.frail2 <- coxph(Surv(futime,status) ~ laser:trt + age + risk + trt + frailty(id, distribution="gamma"), data=retinopathy)
+#cox.frail.full <- coxph(Surv(futime,status) ~ eye + age + type + risk + laser:trt + trt + frailty(id, distribution="gamma"), data=retinopathy)
+#step <- stepAIC(cox.frail.full, direction = "both")
+#step$anova
+summary(cox.frail)
+summary(cox.frail2)
+```
+
+The p-value for the frailty component is 0.023 which is less than 0.05, indicating that the frailty component is significant to our model. Because our frailty component is significant, we conclude that the variance of the random component is non-zero for this model. We get that the variance of our random effect is 0.793 and this is significant according to our test. We notice that the hazard ratio we received in our final model without frailty was 1.1572 and the model with frailty has a hazard ratio of exp(0.1669) = 1.1816. So with our frailty model, we observe that our hazard ratio is slighly larger than that without the frailty componenet. Additionally, we notice that the hazard ratio we received in our final model without frailty was 0.4594 and the model with frailty has a hazard ratio of exp(-0.9050) = 0.4045. With our frailty model, we observe that our hazard ratio is slighly lower than that without the frailty component. We notice that with both covariates, our hazard ratios for the covariates in our frailty model deviate more from 1 then the hazard ratios from the model without frailty. This shows that our frailty model, after accounting for the individual level differences, emphasizes the differences in all risk levels and between treatment and control. We are 95% confident that the true hazard ratio for risk is between 1.032 and 1.353. We are 95% confident that the the true hazard ratio for treatment is between 0.2873 and 0.5697. For the risk factor, we found that the confidence interval for the frailty model is wider than the one without the frailty component. For the treatment, we found that the confidencew interval for the model without the frailty componenet was wider than the one with the frailty component. 
+
+We also fit a model that included the covartiates, age, risk, trt, laser:trt, and the frailty component on id. We find that the 95% confidence interval for age is between 0.992 and 1.021 and this interval includes 1 so age is not signficant. We find that the 95% confidence interval for interaction between laser and treatment is between 0.6417 and 2.077 and this includes 1 so interaction between laser and treatment is not significant either. 
+
+We can also use a cluster method instead of frailty because cluster does not assume a gamma distribution. 
+
+```{r cluster}
+cox.cluster <- coxph(Surv(futime,status) ~ risk + trt + cluster(id), data=retinopathy)
+summary(cox.cluster)
+```
+When we use a cluster method as opposed to the frailty method, we get that the 95% confidence interval is between 1.0306 and 1.2994. We find that the confidence interval for our cluster method is narrower than that of our frailty method. We find that the 95% confidence interval is between 0.3425 and 0.6161. We find that the confidence interval for our cluster method is narrower than that of our frailty model. In general, our confidence intervals for our cluster method are narrower than that of the frailty method.  
+
+We should also check whether our new model with the frailty component satisfies the proportional hazards assumption. We will use a coxzph test to test this.
+
+```{r test}
+cox.zph(cox.frail)
+```
+When we run our coxzph test, the p-value for risk of 0.190 which is greater than 0.05 suggests that we fail to reject the null hypothesis that the proportional hazards assumption is true. The p-value for trt of 0.261 is greater than 0.05 suggests that we fail to reject the null hypothesis as well. Thus, our proportional hazard assumption is true for risk and trt. This shows us that our frailty model satisfies the proportional hazards assumption so we are justified to use this as our model.
+
+#References
+
+\indent A. L. Blair, D. R. Hadden, J. A. Weaver, D. B. Archer, P. B. Johnston and C. J. Maguire (1976). The 5-year prognosis for vision in diabetes, American Journal of Ophthalmology, 81:383-396.
+
+\indent D. Kleinbaum, M. Klein (2012) Survival Analysis: A Self-Learning Text 3rd ed.
+
+\indent W. J. Huster, R. Brookmeyer and S. G. Self (1989). Modelling paired survival data with covariates, Biometrics 45:145-156.
+
+#Appendix
+Because we already visualized treatment and control, we decide to make a Kaplan Meier plot to visualize the risk factor as well.
+
+```{r, echo = F}
+riskfit <- survfit(Surv(futime,status)~risk, data = retinopathy)
+plot(riskfit, col = 2:7, main = "Kaplan Meier Plot of Survival Based on Risk Factor",
+     xlab = "Months until Loss of Vision", ylab = "Survival Probability")
+legend(0,0.5, c("risk: 6","risk: 8", "risk: 9", "risk: 10", "risk: 11", "risk: 12"), fill = 2:7)
+```
+
+We can see that in general, higher risk leads to lower survival times. There seem to be some abnormalities which may have been the result of those eyes being the control rather than the treatment. It can also be contributed by the lack of observations for some of the risk factors such as for risk 6 and 8.
+
+#R Code
+```{r eval = FALSE}
+#SETUP:
+library(survival)
+library(car)
+library(MASS)
+
+#MODEL SETUP
+summary(retinopathy)
+
+#BASIC ESTIMATION
+ret.trt.control.survfit <- survfit(Surv(futime, status) ~ trt, data = retinopathy)
+plot(ret.trt.control.survfit, main = "Kaplan Meier Plot of Survival of Laser Treatment Patients 
+     for Control and Treated",
+     xlab = "Months until Loss of Vision", ylab = "Survival Probability", col = c(2,3),
+     mark.time = TRUE, mark = 18)
+legend(3,0.25, c("Control Eye","Treated Eye"), fill = c(2,3))
+
+treat.cox <- coxph(Surv(futime, status) ~ trt, data = retinopathy)
+treat.cox
+
+#MODEL FITTING
+retino.full <- coxph(Surv(futime, status) ~  eye + age + type + risk + laser:trt + trt, 
+                     data = retinopathy)#full model of all covariates we want to test
+Anova(retino.full, type = "III", test.statistic = "LR") # model fitting using likelihood 
+#ratio tests
+step <- stepAIC(retino.full, direction = "both") #stepwise anova, another model fitting technique
+step$anova
+
+retino.control <- coxph(Surv(futime, status) ~ eye + age + type + laser, data = retinopathy)#model
+#that we compare to full model to see if risk and trt are significant
+retino.final <- coxph(Surv(futime,status) ~ risk + trt, data = retinopathy) #final model that 
+#we obtain
+lrt <- 2*(retino.full$loglik[2] - retino.control$loglik[2])
+lrt
+pchisq(lrt, df = 2, lower.tail = F)
+
+#MODEL CHECKING
+retino_loglog <- survfit(Surv(futime, status) ~ trt, data = retinopathy)
+plot(retino_loglog, fun = "cloglog", col = c(2,3), 
+     xlab = "Time", ylab = "Log(-Log(S))",
+     main = "LogLog plot of Survival Time for Treatment and Control") #loglog plot for trt
+legend(20,-4, c("control","treatment"), fill = c(2,3))
+
+cox.zph(retino.final)
+
+#MODEL EXPLANATION/SUMMARY
+summary(retino.final)
+
+#EXTENSION
+#fit a coxph to a frailty model
+cox.frail <- coxph(Surv(futime,status) ~ risk + trt + frailty(id, distribution="gamma"), 
+                   data=retinopathy)
+cox.frail2 <- coxph(Surv(futime,status) ~ laser:trt + age + risk + trt + 
+                      frailty(id, distribution="gamma"), data=retinopathy)
+summary(cox.frail)
+summary(cox.frail2)
+
+cox.cluster <- coxph(Surv(futime,status) ~ risk + trt + cluster(id), data=retinopathy)
+summary(cox.cluster)
+
+cox.zph(cox.frail) #model checking for frailty model
+
+
+#APPENDIX
+riskfit <- survfit(Surv(futime,status)~risk, data = retinopathy)
+plot(riskfit, col = 2:7, main = "Kaplan Meier Plot of Survival Based on Risk Factor",
+     xlab = "Months until Loss of Vision", ylab = "Survival Probability")
+legend(0,0.5, c("risk: 6","risk: 8", "risk: 9", "risk: 10", "risk: 11", "risk: 12"), fill = 2:7)
+```
+
+
+
+
+
+
+
+
+
+
+
